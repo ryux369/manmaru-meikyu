@@ -1,0 +1,1719 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<!-- layout-v-ipad7-always-pad -->
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>まんまる迷宮 - アーケード風ドットイーター</title>
+<style>
+  :root {
+    --bg: #0a0a12;
+    --neon: #00e5ff;
+    --neon2: #ff2d95;
+    --hud: #e8f0ff;
+    /* Floor for title+hud+controls+footer+gaps; JS may raise further.
+       460+ keeps first paint on iPad from underestimating chrome. */
+    --ui-chrome: 460px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    height: 100%;
+    background: radial-gradient(ellipse at 50% 30%, #161632 0%, var(--bg) 65%);
+    color: var(--hud);
+    font-family: "Segoe UI", "Hiragino Sans", "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #app {
+    /* Grid reserves title/hud/controls/footer rows so the D-pad is never
+       clipped below the fold when the maze wants more height (esp. iPad). */
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+    align-content: stretch;
+    width: 100%;
+    height: 100vh;
+    min-height: 100vh;
+    max-height: 100vh;
+    height: 100dvh;
+    min-height: 100dvh;
+    max-height: 100dvh;
+    padding: 8px 8px max(8px, env(safe-area-inset-bottom));
+    gap: 10px;
+    overflow: hidden;
+  }
+  h1 {
+    flex: 0 0 auto;
+    font-size: clamp(1.1rem, 4vw, 1.65rem);
+    letter-spacing: 0.14em;
+    text-shadow: 0 0 12px var(--neon), 0 0 28px rgba(0,229,255,0.35);
+    color: #b8ffff;
+    font-weight: 700;
+  }
+  #hud {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+    font-size: clamp(0.8rem, 2.8vw, 0.98rem);
+    width: min(100%, 560px);
+  }
+  .hud-item {
+    background: rgba(16,24,52,0.85);
+    border: 1px solid rgba(61,107,255,0.5);
+    border-radius: 8px;
+    padding: 6px 12px;
+    box-shadow: 0 0 12px rgba(0,229,255,0.12);
+  }
+  .hud-item span { color: #ffd54a; font-weight: 700; }
+  #btn-mute {
+    min-width: 72px;
+    border: none;
+    background: transparent;
+    color: var(--hud);
+    font: inherit;
+    cursor: pointer;
+    padding: 0;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #btn-mute:active { opacity: 0.75; }
+  #wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    align-self: stretch;
+    justify-self: center;
+    min-width: 0;
+    min-height: 0; /* allow 1fr track to shrink below canvas intrinsic size */
+    width: min(100%, 560px);
+    height: 100%;
+    /* Prefer the grid cell; chrome calc is a safety cap if JS lags. */
+    max-height: min(100%, calc(100vh - var(--ui-chrome, 460px)));
+    max-height: min(100%, calc(100dvh - var(--ui-chrome, 460px)));
+    line-height: 0;
+    border-radius: 12px;
+    box-shadow:
+      0 0 0 2px rgba(61,107,255,0.55),
+      0 0 36px rgba(0,229,255,0.22);
+    overflow: hidden;
+    touch-action: none;
+  }
+  canvas {
+    display: block;
+    width: auto;
+    height: auto;
+    max-width: 100%;
+    max-height: 100%;
+    background: #04040c;
+    touch-action: none;
+  }
+  #overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(4,4,14,0.8);
+    backdrop-filter: blur(3px);
+    text-align: center;
+    padding: 18px;
+    z-index: 5;
+  }
+  #overlay.hidden { display: none; }
+  #overlay, #overlay button { touch-action: manipulation; }
+  #overlay h2 {
+    font-size: clamp(1.45rem, 5vw, 2.2rem);
+    margin-bottom: 12px;
+    text-shadow: 0 0 18px var(--neon2);
+    color: #fff;
+  }
+  #overlay p {
+    font-size: clamp(0.85rem, 3vw, 1rem);
+    line-height: 1.65;
+    opacity: 0.93;
+    max-width: 340px;
+    margin-bottom: 14px;
+  }
+  #overlay .hint {
+    color: var(--neon);
+    font-size: 0.92rem;
+    animation: pulse 1.35s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 1; }
+  }
+  #overlay .action-button {
+    min-width: min(250px, 78vw);
+    min-height: 64px;
+    margin: 2px 0 10px;
+    padding: 14px 30px;
+    border: 2px solid var(--neon);
+    border-radius: 14px;
+    background: linear-gradient(145deg, #245a88, #13234d);
+    color: #fff;
+    font-size: clamp(1.1rem, 4.8vw, 1.45rem);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    box-shadow: 0 0 18px rgba(0,229,255,0.42), inset 0 1px 0 rgba(255,255,255,0.2);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  #overlay .action-button:active, #overlay .action-button:focus-visible {
+    background: linear-gradient(145deg, #347ab2, #1c3670);
+    box-shadow: 0 0 26px rgba(0,229,255,0.72), inset 0 1px 0 rgba(255,255,255,0.25);
+    transform: scale(0.96);
+  }
+  #controls {
+    /* Touch/coarse-pointer devices keep the on-screen controller at every width. */
+    display: grid;
+    flex-shrink: 0;
+    align-self: center;
+    justify-self: center;
+    grid-template-areas:
+      ". up ."
+      "left mid right"
+      ". down .";
+    grid-template-columns: 76px 76px 76px;
+    grid-template-rows: 76px 76px 76px;
+    gap: 10px;
+    margin-top: 2px;
+    position: static;
+    z-index: 2;
+    padding: 8px;
+    background: #0a0a12;
+    opacity: 1;
+    visibility: visible;
+    border-radius: 18px;
+    border: 1px solid rgba(61,107,255,0.35);
+    pointer-events: auto;
+  }
+  .pad {
+    width: 76px;
+    height: 76px;
+    border: none;
+    border-radius: 16px;
+    background: linear-gradient(145deg, #223066, #121a38);
+    color: #9ff;
+    font-size: 1.7rem;
+    box-shadow: 0 0 14px rgba(0,229,255,0.18), inset 0 1px 0 rgba(255,255,255,0.12);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  .pad:active, .pad.active {
+    background: linear-gradient(145deg, #334f99, #1a2a66);
+    box-shadow: 0 0 20px rgba(0,229,255,0.55);
+    transform: scale(0.94);
+  }
+  .pad.up { grid-area: up; }
+  .pad.down { grid-area: down; }
+  .pad.left { grid-area: left; }
+  .pad.right { grid-area: right; }
+  .pad.mid {
+    grid-area: mid;
+    font-size: 0.72rem;
+    color: #aab;
+    line-height: 1.2;
+  }
+  @media (max-width: 380px) {
+    #controls {
+      grid-template-columns: 68px 68px 68px;
+      grid-template-rows: 68px 68px 68px;
+      gap: 8px;
+    }
+    .pad { width: 68px; height: 68px; font-size: 1.5rem; }
+  }
+  /* Short phones: smaller pads so maze + controls fit in 100dvh */
+  @media (max-height: 760px) {
+    #controls {
+      grid-template-columns: 64px 64px 64px;
+      grid-template-rows: 64px 64px 64px;
+      gap: 8px;
+      padding: 6px;
+    }
+    .pad { width: 64px; height: 64px; font-size: 1.4rem; }
+    #footer { display: none; }
+    h1 { font-size: clamp(0.95rem, 3.6vw, 1.35rem); }
+    #hud { gap: 8px; }
+    .hud-item { padding: 4px 10px; }
+  }
+  @media (max-height: 680px) {
+    #controls {
+      grid-template-columns: 56px 56px 56px;
+      grid-template-rows: 56px 56px 56px;
+      gap: 6px;
+      padding: 4px;
+    }
+    .pad { width: 56px; height: 56px; font-size: 1.25rem; }
+    .pad.mid { font-size: 0.62rem; }
+  }
+  /* Touch tablets / iPad: keep maze ABOVE controls (never hide D-pad). */
+  @media (min-width: 600px) {
+    #app { gap: 12px; }
+    #wrap {
+      width: min(100%, 420px);
+    }
+    #footer { display: none; }
+    #controls {
+      display: grid;
+      visibility: visible;
+      opacity: 1;
+      grid-template-columns: 72px 72px 72px;
+      grid-template-rows: 72px 72px 72px;
+    }
+    .pad { width: 72px; height: 72px; font-size: 1.55rem; }
+  }
+  @media (min-width: 600px) and (orientation: landscape) {
+    /* Still stack vertically: maze on top, pad below — pad stays on-screen. */
+    #wrap { width: min(100%, 360px); }
+    #controls {
+      grid-template-columns: 60px 60px 60px;
+      grid-template-rows: 60px 60px 60px;
+      gap: 8px;
+      padding: 6px;
+    }
+    .pad { width: 60px; height: 60px; font-size: 1.35rem; }
+    .pad.mid { font-size: 0.62rem; }
+    h1 { font-size: 1.1rem; }
+    .hud-item { padding: 4px 10px; }
+  }
+  /* Never hide the D-pad via CSS — iPadOS often reports (hover:hover) and
+     (pointer:fine) in desktop-site mode. Visibility is decided only in JS. */
+  #controls.show-pad {
+    display: grid !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+  }
+  #footer {
+    flex: 0 0 auto;
+    font-size: 0.72rem;
+    opacity: 0.5;
+    text-align: center;
+  }
+  /* Controls visibility is decided in JS so iPadOS desktop mode still
+     gets the pad even when Safari reports a desktop-like pointer. */
+</style>
+</head>
+<body>
+<div id="app">
+  <h1>まんまる迷宮</h1>
+  <div id="hud">
+    <div class="hud-item">スコア <span id="score">0</span></div>
+    <div class="hud-item">ハイスコア <span id="hiscore">0</span></div>
+    <div class="hud-item">ライフ <span id="lives">3</span></div>
+    <div class="hud-item">レベル <span id="level">1</span></div>
+    <div class="hud-item"><button type="button" id="btn-mute" aria-label="消音">🔊 消音</button></div>
+  </div>
+  <div id="wrap">
+    <canvas id="game" width="560" height="620"></canvas>
+    <div id="overlay">
+      <h2 id="ov-title">まんまる迷宮</h2>
+      <p id="ov-msg">ドットをすべて食べてクリア！<br>パワーエサで敵（アカ・アオ・ピンク・オレンジ）を食べられる。<br><br>操作：矢印キー / WASD<br>スマホ：下のパッド or 画面スワイプ<br><br>※最初の「スタート」タップで音が有効になります（iPhone Safari）</p>
+      <button type="button" class="action-button" id="btn-action" aria-label="スタート">スタート</button>
+      <p class="hint" id="ov-hint">下のボタン、または画面をタップ（キーボードはSpace / Enter）</p>
+    </div>
+  </div>
+  <div id="controls" class="show-pad">
+    <button type="button" class="pad up" data-dir="up" aria-label="上">▲</button>
+    <button type="button" class="pad left" data-dir="left" aria-label="左">◀</button>
+    <button type="button" class="pad mid" id="btn-pause" aria-label="スタート">▶<br>スタート</button>
+    <button type="button" class="pad right" data-dir="right" aria-label="右">▶</button>
+    <button type="button" class="pad down" data-dir="down" aria-label="下">▼</button>
+  </div>
+  <div id="footer">オリジナル作品｜単一HTMLで遊べるミニアーケード</div>
+</div>
+<script>
+(() => {
+  "use strict";
+
+  const TILE = 20;
+  const COLS = 28;
+  const ROWS = 31;
+  const HS_KEY = "manmaru_meikyu_hiscore_v1";
+
+  // 0 path, 1 wall, 2 dot, 3 power pellet, 4 ghost-house gate
+  const MAZE_TEMPLATE = [
+    "1111111111111111111111111111",
+    "1222222222221122222222222221",
+    "1211112111111211111121111121",
+    "1311112111111211111121111131",
+    "1211112111111211111121111121",
+    "1222222222222222222222222221",
+    "1211112112111111121121111121",
+    "1211112112111111121121111121",
+    "1222222112221122221122222221",
+    "1111112111111211111121111111",
+    "0000012111111211111121000000",
+    "0000012110000000001121000000",
+    "0000012110111441110121000000",
+    "1111112110100000010121111111",
+    "0000002000100000010020000000",
+    "1111112110100000010121111111",
+    "0000012110111111110121000000",
+    "0000012110000000001121000000",
+    "0000012110111111110121000000",
+    "1111112110111111110121111111",
+    "1222222222221122222222222221",
+    "1211112111111211111121111121",
+    "1211112111111211111121111121",
+    "1322112222220022222222112231",
+    "1112112112111111121121121111",
+    "1112112112111111121121121111",
+    "1222222112221122221122222221",
+    "1211111111111211111111111121",
+    "1211111111111211111111111121",
+    "1222222222222222222222222221",
+    "1111111111111111111111111111",
+  ];
+
+  const DIR = {
+    up:    { x: 0, y: -1 },
+    down:  { x: 0, y:  1 },
+    left:  { x: -1, y: 0 },
+    right: { x:  1, y: 0 },
+  };
+  const OPP = { up: "down", down: "up", left: "right", right: "left" };
+  const DIR_ORDER = ["up", "left", "down", "right"];
+
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  const overlay = document.getElementById("overlay");
+  const ovTitle = document.getElementById("ov-title");
+  const ovMsg = document.getElementById("ov-msg");
+  const ovHint = document.getElementById("ov-hint");
+  const actionButton = document.getElementById("btn-action");
+  const pauseButton = document.getElementById("btn-pause");
+  const elScore = document.getElementById("score");
+  const elHiscore = document.getElementById("hiscore");
+  const elLives = document.getElementById("lives");
+  const elLevel = document.getElementById("level");
+  const muteButton = document.getElementById("btn-mute");
+
+  let hiscore = parseInt(localStorage.getItem(HS_KEY) || "0", 10) || 0;
+  elHiscore.textContent = String(hiscore);
+
+  // ---- Audio (Web Audio API only; no external files) ----
+  const MUTE_KEY = "manmaru_meikyu_mute_v1";
+  let audioCtx = null;
+  let masterGain = null;
+  let muted = localStorage.getItem(MUTE_KEY) === "1";
+  let audioUnlocked = false;
+  let lastDotSoundAt = 0;
+  let bgmOsc = null;
+  let bgmGain = null;
+  let bgmLfo = null;
+  let bgmWobble = null;
+  let totalDotsAtLevel = 0;
+
+  function ensureAudio() {
+    if (audioCtx) return audioCtx;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    audioCtx = new AC();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = muted ? 0 : 0.55;
+    masterGain.connect(audioCtx.destination);
+    return audioCtx;
+  }
+
+  function updateMuteButton() {
+    if (!muteButton) return;
+    if (muted) {
+      muteButton.textContent = "🔇 音を出す";
+      muteButton.setAttribute("aria-label", "音を出す");
+    } else {
+      muteButton.textContent = "🔊 消音";
+      muteButton.setAttribute("aria-label", "消音");
+    }
+  }
+
+  function setMuted(next) {
+    muted = !!next;
+    localStorage.setItem(MUTE_KEY, muted ? "1" : "0");
+    updateMuteButton();
+    if (masterGain) {
+      const ctx = audioCtx;
+      const now = ctx ? ctx.currentTime : 0;
+      masterGain.gain.cancelScheduledValues(now);
+      masterGain.gain.setValueAtTime(muted ? 0 : 0.55, now);
+    }
+    if (muted) stopBgm();
+    else if (audioUnlocked && mode === "play") startBgm();
+  }
+
+  /** iOS Safari: create context, play silent buffer in same gesture, await resume. */
+  function unlockAudio() {
+    const ctx = ensureAudio();
+    if (!ctx) return Promise.resolve(false);
+
+    // Classic iOS unlock: silent one-sample buffer → destination in this gesture
+    try {
+      const buf = ctx.createBuffer(1, 1, 22050);
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(ctx.destination);
+      src.start(0);
+    } catch (_) {}
+
+    const resumeP = (ctx.state === "suspended")
+      ? ctx.resume().catch(() => {})
+      : Promise.resolve();
+
+    return resumeP.then(() => {
+      audioUnlocked = true;
+      if (!muted && mode === "play") startBgm();
+      return true;
+    });
+  }
+
+  function beep(freq, dur, type, vol, slideTo, delay) {
+    const ctx = ensureAudio();
+    if (!ctx || !masterGain || muted || !audioUnlocked) return;
+    if (ctx.state === "suspended") return;
+    const t0 = ctx.currentTime + (delay || 0);
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type || "square";
+    osc.frequency.setValueAtTime(freq, t0);
+    if (slideTo != null) {
+      osc.frequency.linearRampToValueAtTime(slideTo, t0 + dur * 0.9);
+    }
+    const v = Math.max(0.0001, (vol == null ? 0.1 : vol));
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(v, t0 + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + Math.max(0.03, dur));
+    osc.connect(gain);
+    gain.connect(masterGain);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.02);
+  }
+
+  function playConfirmBeep() {
+    beep(880, 0.09, "square", 0.14, null, 0);
+  }
+
+  function playDot() {
+    const now = performance.now();
+    if (now - lastDotSoundAt < 42) return;
+    lastDotSoundAt = now;
+    // Pitch rises slightly as dots are cleared
+    const eatenRatio = totalDotsAtLevel > 0
+      ? 1 - (dotsLeft / totalDotsAtLevel)
+      : 0;
+    const f = 520 + eatenRatio * 280;
+    beep(f, 0.06, "square", 0.12, f * 1.12, 0);
+  }
+
+  function playPower() {
+    beep(180, 0.22, "triangle", 0.16, 90, 0);
+    beep(240, 0.18, "square", 0.1, 120, 0.04);
+  }
+
+  function playGhostEat() {
+    beep(660, 0.08, "square", 0.12, 880, 0);
+    beep(880, 0.1, "triangle", 0.1, 1180, 0.07);
+    beep(1180, 0.12, "sine", 0.08, 1400, 0.14);
+  }
+
+  function playDeath() {
+    stopBgm();
+    beep(420, 0.18, "sawtooth", 0.13, 180, 0);
+    beep(300, 0.22, "triangle", 0.11, 100, 0.14);
+    beep(160, 0.35, "sine", 0.1, 60, 0.3);
+  }
+
+  function playClear() {
+    stopBgm();
+    const notes = [523, 659, 784, 1046];
+    notes.forEach((f, i) => beep(f, 0.16, "triangle", 0.12, f * 1.02, i * 0.12));
+  }
+
+  function playStart() {
+    const notes = [392, 523, 659, 784];
+    notes.forEach((f, i) => beep(f, 0.12, "square", 0.11, null, i * 0.09));
+  }
+
+  function stopBgm() {
+    if (bgmOsc) {
+      try { bgmOsc.stop(); } catch (_) {}
+      try { bgmOsc.disconnect(); } catch (_) {}
+      bgmOsc = null;
+    }
+    if (bgmLfo) {
+      try { bgmLfo.stop(); } catch (_) {}
+      try { bgmLfo.disconnect(); } catch (_) {}
+      bgmLfo = null;
+    }
+    if (bgmWobble) {
+      try { bgmWobble.stop(); } catch (_) {}
+      try { bgmWobble.disconnect(); } catch (_) {}
+      bgmWobble = null;
+    }
+    if (bgmGain) {
+      try { bgmGain.disconnect(); } catch (_) {}
+      bgmGain = null;
+    }
+  }
+
+  function startBgm() {
+    if (muted || !audioUnlocked) return;
+    const ctx = ensureAudio();
+    if (!ctx || !masterGain) return;
+    if (bgmOsc) return;
+    if (ctx.state === "suspended") return;
+
+    bgmGain = ctx.createGain();
+    bgmGain.gain.value = 0.025;
+    bgmGain.connect(masterGain);
+
+    bgmOsc = ctx.createOscillator();
+    bgmOsc.type = "triangle";
+    bgmOsc.frequency.value = 110;
+
+    // gentle pulse for ambient loop feel
+    bgmLfo = ctx.createOscillator();
+    bgmLfo.type = "sine";
+    bgmLfo.frequency.value = 0.35;
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.value = 0.01;
+    bgmLfo.connect(lfoGain);
+    lfoGain.connect(bgmGain.gain);
+
+    // slow frequency wobble for ambient feel
+    bgmWobble = ctx.createOscillator();
+    bgmWobble.type = "sine";
+    bgmWobble.frequency.value = 0.12;
+    const wobGain = ctx.createGain();
+    wobGain.gain.value = 8;
+    bgmWobble.connect(wobGain);
+    wobGain.connect(bgmOsc.frequency);
+    bgmWobble.start();
+
+    bgmOsc.connect(bgmGain);
+    bgmOsc.start();
+    bgmLfo.start();
+  }
+
+  updateMuteButton();
+  let lastMuteAt = -Infinity;
+  function onMuteToggle(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const now = performance.now();
+    if (now - lastMuteAt < 350) return;
+    lastMuteAt = now;
+    if (muted) {
+      // Turning sound ON: unlock then confirm beep
+      setMuted(false);
+      unlockAudio().then(() => {
+        if (!muted) playConfirmBeep();
+      });
+    } else {
+      setMuted(true);
+    }
+  }
+  ["pointerup", "click"].forEach(type => {
+    muteButton.addEventListener(type, onMuteToggle, { passive: false });
+  });
+
+  let maze = [];
+  let dotsLeft = 0;
+  let score = 0;
+  let lives = 3;
+  let level = 1;
+  let mode = "start"; // start|play|pause|die|clear|over
+  let frightLeft = 0;
+  let ghostEatPts = 200;
+  let scatter = true;
+  let phaseUntil = 0;
+  let animT = 0;
+  let lastTs = 0;
+  let floatPts = null;
+
+  const player = {
+    type: "player",
+    x: 0, y: 0,
+    dir: "left",
+    want: "left",
+    mouth: 0,
+    mouthV: 1,
+    dead: false,
+    deadT: 0,
+  };
+
+  // アカ=chase, アオ=ambush, ピンク=random, オレンジ=patrol
+  const ghosts = [
+    { name: "アカ",   color: "#ff3b3b", ai: "chase",  corner: { c: 25, r: 0  }, homeC: 13.5, homeR: 14 },
+    { name: "アオ",   color: "#3bb0ff", ai: "ambush", corner: { c: 1,  r: 0  }, homeC: 11.5, homeR: 14 },
+    { name: "ピンク", color: "#ff7ad9", ai: "random", corner: { c: 25, r: 30 }, homeC: 13.5, homeR: 14 },
+    { name: "オレンジ", color: "#ff9a3b", ai: "patrol", corner: { c: 1,  r: 30 }, homeC: 15.5, homeR: 14 },
+  ];
+
+  function buildMaze() {
+    maze = MAZE_TEMPLATE.map(row => row.split("").map(Number));
+    dotsLeft = 0;
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        if (maze[r][c] === 2 || maze[r][c] === 3) dotsLeft++;
+      }
+    }
+    totalDotsAtLevel = dotsLeft;
+  }
+
+  function tile(c, r) {
+    if (r < 0 || r >= ROWS) return 1;
+    if (c < 0 || c >= COLS) return 0; // tunnel
+    return maze[r][c];
+  }
+
+  function blocked(c, r, ent) {
+    // tunnel columns allowed
+    if (r === 14 && (c < 0 || c >= COLS)) return false;
+    if (r < 0 || r >= ROWS || c < 0 || c >= COLS) return true;
+    const t = maze[r][c];
+    if (t === 1) return true;
+    if (t === 4) {
+      if (ent.type === "player") return true;
+      if (ent.state === "eyes") return false;
+      return !(ent.inHouse || ent.leaving);
+    }
+    return false;
+  }
+
+  function cellOf(ent) {
+    return { c: Math.round(ent.x / TILE - 0.5), r: Math.round(ent.y / TILE - 0.5) };
+  }
+
+  function centerOf(c, r) {
+    return { x: c * TILE + TILE / 2, y: r * TILE + TILE / 2 };
+  }
+
+  function nearCenter(ent, tol = 1.2) {
+    const { c, r } = cellOf(ent);
+    const ctr = centerOf(c, r);
+    return Math.abs(ent.x - ctr.x) <= tol && Math.abs(ent.y - ctr.y) <= tol;
+  }
+
+  function snapCenter(ent) {
+    const { c, r } = cellOf(ent);
+    const ctr = centerOf(c, r);
+    ent.x = ctr.x;
+    ent.y = ctr.y;
+  }
+
+  function wrapTunnel(ent) {
+    if (ent.x < -TILE / 2) ent.x = COLS * TILE + TILE / 2;
+    else if (ent.x > COLS * TILE + TILE / 2) ent.x = -TILE / 2;
+  }
+
+  function resetActors(fullPhase) {
+    player.x = 13.5 * TILE;
+    player.y = 23 * TILE + TILE / 2;
+    player.dir = "left";
+    player.want = "left";
+    player.mouth = 0.4;
+    player.mouthV = 1;
+    player.dead = false;
+    player.deadT = 0;
+
+    const starts = [
+      { x: 13.5 * TILE, y: 11 * TILE + TILE / 2, dir: "left", house: false },
+      { x: 11.5 * TILE, y: 14 * TILE + TILE / 2, dir: "up",   house: true  },
+      { x: 13.5 * TILE, y: 14 * TILE + TILE / 2, dir: "down", house: true  },
+      { x: 15.5 * TILE, y: 14 * TILE + TILE / 2, dir: "up",   house: true  },
+    ];
+    ghosts.forEach((g, i) => {
+      Object.assign(g, {
+        x: starts[i].x,
+        y: starts[i].y,
+        dir: starts[i].dir,
+        want: starts[i].dir,
+        inHouse: starts[i].house,
+        leaving: false,
+        state: scatter ? "scatter" : "chase",
+        releaseAt: performance.now() + i * 1800,
+        type: "ghost",
+      });
+    });
+    frightLeft = 0;
+    ghostEatPts = 200;
+    floatPts = null;
+    if (fullPhase) {
+      scatter = true;
+      phaseUntil = performance.now() + 7000;
+    }
+  }
+
+  function updateHUD() {
+    elScore.textContent = String(score);
+    elLives.textContent = String(lives);
+    elLevel.textContent = String(level);
+    if (score > hiscore) {
+      hiscore = score;
+      localStorage.setItem(HS_KEY, String(hiscore));
+      elHiscore.textContent = String(hiscore);
+    } else {
+      elHiscore.textContent = String(hiscore);
+    }
+    if (typeof scheduleFitCanvas === "function") scheduleFitCanvas();
+  }
+
+  function actionLabel() {
+    return ({
+      start: "スタート",
+      play: "一時停止",
+      pause: "再開",
+      clear: "次のレベル",
+      over: "もう一度",
+    })[mode] || "スタート";
+  }
+
+  function updateActionControls() {
+    const label = actionLabel();
+    const midIcon = ({
+      start: "▶",
+      play: "II",
+      pause: "▶",
+      clear: "▶",
+      over: "↻",
+    })[mode] || "▶";
+    actionButton.textContent = label;
+    actionButton.setAttribute("aria-label", label);
+    pauseButton.innerHTML = `${midIcon}<br>${label === "次のレベル" ? "次へ" : label}`;
+    pauseButton.setAttribute("aria-label", label === "次のレベル" ? "次へ" : label);
+  }
+
+  function showOverlay(title, msg) {
+    ovTitle.textContent = title;
+    ovMsg.innerHTML = msg;
+    updateActionControls();
+    ovHint.textContent = `下の「${actionLabel()}」ボタン、または画面をタップ（Space / Enterでも可）`;
+    overlay.classList.remove("hidden");
+  }
+
+  function hideOverlay() {
+    overlay.classList.add("hidden");
+    updateActionControls();
+  }
+
+  function startGame() {
+    score = 0;
+    lives = 3;
+    level = 1;
+    buildMaze();
+    resetActors(true);
+    mode = "play";
+    hideOverlay();
+    updateHUD();
+    lastTs = 0;
+    unlockAudio().then(() => {
+      playStart();
+      startBgm();
+    });
+  }
+
+  function nextLevel() {
+    level++;
+    buildMaze();
+    resetActors(true);
+    mode = "play";
+    hideOverlay();
+    updateHUD();
+    lastTs = 0;
+    unlockAudio().then(() => {
+      playStart();
+      startBgm();
+    });
+  }
+
+  // ---- Movement ----
+  function canGo(ent, dir) {
+    const { c, r } = cellOf(ent);
+    const d = DIR[dir];
+    return !blocked(c + d.x, r + d.y, ent);
+  }
+
+  function playerTurnTol() {
+    return Math.max(7, TILE * 0.35);
+  }
+
+  function approachingCenter(ent) {
+    const { c, r } = cellOf(ent);
+    const ctr = centerOf(c, r);
+    const d = DIR[ent.dir];
+    if (d.x !== 0) {
+      const dx = ctr.x - ent.x;
+      return Math.sign(dx) === d.x || Math.abs(dx) < 0.5;
+    }
+    const dy = ctr.y - ent.y;
+    return Math.sign(dy) === d.y || Math.abs(dy) < 0.5;
+  }
+
+  function distToCenter(ent) {
+    const { c, r } = cellOf(ent);
+    const ctr = centerOf(c, r);
+    return Math.hypot(ent.x - ctr.x, ent.y - ctr.y);
+  }
+
+  function trySetDir(ent, dir) {
+    if (!dir || dir === ent.dir) return;
+    // reverse anytime
+    if (dir === OPP[ent.dir]) {
+      ent.dir = dir;
+      ent.want = dir;
+      return;
+    }
+    const isPlayer = ent.type === "player";
+    const tol = isPlayer ? playerTurnTol() : 2.5;
+    if (nearCenter(ent, tol) && canGo(ent, dir)) {
+      snapCenter(ent);
+      ent.dir = dir;
+      ent.want = dir;
+      return;
+    }
+    // Player: earlier commit when heading into an intersection that allows the turn
+    if (isPlayer && canGo(ent, dir) && approachingCenter(ent)) {
+      const dist = distToCenter(ent);
+      if (dist <= tol * 1.6) {
+        snapCenter(ent);
+        ent.dir = dir;
+        ent.want = dir;
+      }
+    }
+  }
+
+  function moveEnt(ent, speed, dtScale) {
+    if (ent.want && ent.want !== ent.dir) trySetDir(ent, ent.want);
+
+    const d = DIR[ent.dir];
+    const step = speed * dtScale;
+    const { c, r } = cellOf(ent);
+    const ctr = centerOf(c, r);
+
+    // If next tile blocked, stop at center
+    if (!canGo(ent, ent.dir)) {
+      // approach center then stop
+      const dx = ctr.x - ent.x;
+      const dy = ctr.y - ent.y;
+      if (d.x !== 0) {
+        if (Math.sign(dx) === d.x || Math.abs(dx) < 0.5) {
+          ent.x = ctr.x;
+          ent.y = ctr.y;
+          return;
+        }
+      }
+      if (d.y !== 0) {
+        if (Math.sign(dy) === d.y || Math.abs(dy) < 0.5) {
+          ent.x = ctr.x;
+          ent.y = ctr.y;
+          return;
+        }
+      }
+    }
+
+    ent.x += d.x * step;
+    ent.y += d.y * step;
+
+    // keep on rails
+    if (d.x !== 0) ent.y = ctr.y;
+    else ent.x = ctr.x;
+
+    // if we passed into a new cell center opportunity, clamp overshoot past blocked
+    const nc = cellOf(ent);
+    if (blocked(nc.c, nc.r, ent) && !(nc.r === 14 && (nc.c < 0 || nc.c >= COLS))) {
+      ent.x = ctr.x;
+      ent.y = ctr.y;
+    }
+
+    wrapTunnel(ent);
+  }
+
+  // ---- Ghost AI ----
+  function playerTile() {
+    return cellOf(player);
+  }
+
+  function targetFor(g) {
+    const p = playerTile();
+    const pd = DIR[player.dir];
+    if (g.state === "eyes") return { c: 13, r: 14 };
+    if (g.state === "frightened") {
+      return { c: (Math.random() * COLS) | 0, r: (Math.random() * ROWS) | 0 };
+    }
+    if (g.state === "scatter") return g.corner;
+
+    switch (g.ai) {
+      case "chase":
+        return p;
+      case "ambush":
+        return { c: p.c + pd.x * 4, r: p.r + pd.y * 4 };
+      case "random":
+        return { c: (Math.random() * COLS) | 0, r: (Math.random() * ROWS) | 0 };
+      case "patrol": {
+        const gc = cellOf(g);
+        const dist = Math.hypot(gc.c - p.c, gc.r - p.r);
+        return dist > 8 ? p : g.corner;
+      }
+      default:
+        return p;
+    }
+  }
+
+  function pickGhostDir(g) {
+    if (!nearCenter(g, 1.5)) return;
+    snapCenter(g);
+
+    // House logic
+    if (g.inHouse) {
+      const now = performance.now();
+      if (!g.leaving && now >= g.releaseAt) g.leaving = true;
+      if (g.leaving) {
+        if (Math.abs(g.x - 13.5 * TILE) > 1.5) {
+          g.dir = g.x < 13.5 * TILE ? "right" : "left";
+          g.want = g.dir;
+          return;
+        }
+        g.x = 13.5 * TILE;
+        g.dir = "up";
+        g.want = "up";
+        if (g.y <= 11 * TILE + TILE / 2 + 0.5) {
+          g.y = 11 * TILE + TILE / 2;
+          g.inHouse = false;
+          g.leaving = false;
+          g.dir = Math.random() < 0.5 ? "left" : "right";
+          g.want = g.dir;
+          g.state = frightLeft > 0 ? "frightened" : (scatter ? "scatter" : "chase");
+        }
+        return;
+      }
+      // idle bob
+      if (g.dir !== "up" && g.dir !== "down") g.dir = "up";
+      if (g.y <= 13.2 * TILE) g.dir = "down";
+      if (g.y >= 14.8 * TILE) g.dir = "up";
+      g.want = g.dir;
+      return;
+    }
+
+    const tgt = targetFor(g);
+    const { c, r } = cellOf(g);
+    let best = null;
+    let bestScore = Infinity;
+    const choices = [];
+
+    for (const dir of DIR_ORDER) {
+      if (dir === OPP[g.dir] && g.state !== "eyes") continue;
+      const d = DIR[dir];
+      const nc = c + d.x, nr = r + d.y;
+      if (blocked(nc, nr, g)) continue;
+      choices.push(dir);
+      const score = (nc - tgt.c) * (nc - tgt.c) + (nr - tgt.r) * (nr - tgt.r);
+      if (score < bestScore) {
+        bestScore = score;
+        best = dir;
+      }
+    }
+
+    if (g.state === "frightened") {
+      if (choices.length) {
+        g.dir = choices[(Math.random() * choices.length) | 0];
+        g.want = g.dir;
+      }
+      return;
+    }
+
+    if (best) {
+      g.dir = best;
+      g.want = best;
+    } else if (choices.length) {
+      g.dir = choices[0];
+      g.want = g.dir;
+    } else {
+      g.dir = OPP[g.dir];
+      g.want = g.dir;
+    }
+  }
+
+  function activatePower() {
+    frightLeft = Math.max(3000, 7000 - (level - 1) * 500);
+    ghostEatPts = 200;
+    ghosts.forEach(g => {
+      if (g.state !== "eyes" && !g.inHouse) {
+        g.state = "frightened";
+        g.dir = OPP[g.dir];
+        g.want = g.dir;
+      }
+    });
+  }
+
+  function updatePhases(now) {
+    if (frightLeft > 0) return;
+    if (now >= phaseUntil) {
+      scatter = !scatter;
+      phaseUntil = now + (scatter ? 7000 : 20000);
+      ghosts.forEach(g => {
+        if (g.state === "chase" || g.state === "scatter") {
+          g.state = scatter ? "scatter" : "chase";
+          g.dir = OPP[g.dir];
+          g.want = g.dir;
+        }
+      });
+    } else {
+      ghosts.forEach(g => {
+        if (g.state === "chase" || g.state === "scatter") {
+          g.state = scatter ? "scatter" : "chase";
+        }
+      });
+    }
+  }
+
+  function eatAtPlayer() {
+    let { c, r } = cellOf(player);
+    if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return;
+    const t = maze[r][c];
+    if (t === 2) {
+      maze[r][c] = 0;
+      dotsLeft--;
+      score += 10;
+      updateHUD();
+      playDot();
+    } else if (t === 3) {
+      maze[r][c] = 0;
+      dotsLeft--;
+      score += 50;
+      updateHUD();
+      activatePower();
+      playPower();
+    }
+    if (dotsLeft <= 0 && mode === "play") {
+      mode = "clear";
+      playClear();
+      showOverlay("クリア！", `レベル ${level} クリア！<br>スコア: ${score}`);
+    }
+  }
+
+  function collideGhosts() {
+    const hit = (TILE * 0.72) ** 2;
+    for (const g of ghosts) {
+      const dx = player.x - g.x;
+      const dy = player.y - g.y;
+      if (dx * dx + dy * dy >= hit) continue;
+      if (g.state === "frightened") {
+        g.state = "eyes";
+        g.inHouse = false;
+        g.leaving = false;
+        score += ghostEatPts;
+        floatPts = { x: g.x, y: g.y - 10, v: ghostEatPts, t: 900 };
+        ghostEatPts *= 2;
+        updateHUD();
+        playGhostEat();
+      } else if (g.state !== "eyes") {
+        killPlayer();
+        return;
+      }
+    }
+  }
+
+  function killPlayer() {
+    lives--;
+    updateHUD();
+    player.dead = true;
+    player.deadT = 0;
+    mode = "die";
+    playDeath();
+  }
+
+  // ---- Draw ----
+  function drawMaze() {
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+
+    // soft fill for wall cells
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        if (maze[r][c] !== 1) continue;
+        ctx.fillStyle = "rgba(20, 40, 100, 0.35)";
+        ctx.fillRect(c * TILE + 1, r * TILE + 1, TILE - 2, TILE - 2);
+      }
+    }
+
+    const strokeEdges = (color, width) => {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+          if (maze[r][c] !== 1) continue;
+          const x = c * TILE, y = r * TILE;
+          const edges = [
+            [0, -1, x + 3, y + 3, x + TILE - 3, y + 3],
+            [1, 0, x + TILE - 3, y + 3, x + TILE - 3, y + TILE - 3],
+            [0, 1, x + 3, y + TILE - 3, x + TILE - 3, y + TILE - 3],
+            [-1, 0, x + 3, y + 3, x + 3, y + TILE - 3],
+          ];
+          for (const [dx, dy, x1, y1, x2, y2] of edges) {
+            if (tile(c + dx, r + dy) === 1) continue;
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+          }
+        }
+      }
+    };
+    strokeEdges("rgba(80,130,255,0.3)", 5);
+    strokeEdges("#5b8cff", 2);
+
+    // gate
+    ctx.strokeStyle = "#ff9ad5";
+    ctx.lineWidth = 3;
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        if (maze[r][c] !== 4) continue;
+        ctx.beginPath();
+        ctx.moveTo(c * TILE + 2, r * TILE + TILE / 2);
+        ctx.lineTo(c * TILE + TILE - 2, r * TILE + TILE / 2);
+        ctx.stroke();
+      }
+    }
+  }
+
+  function drawDots() {
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const t = maze[r][c];
+        const x = c * TILE + TILE / 2;
+        const y = r * TILE + TILE / 2;
+        if (t === 2) {
+          ctx.fillStyle = "#ffd86b";
+          ctx.beginPath();
+          ctx.arc(x, y, 2.3, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (t === 3) {
+          const rad = 6.2 + Math.sin(animT * 0.008) * 1.6;
+          ctx.fillStyle = "#fff6b0";
+          ctx.shadowColor = "#ffcc44";
+          ctx.shadowBlur = 12;
+          ctx.beginPath();
+          ctx.arc(x, y, rad, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+        }
+      }
+    }
+  }
+
+  function drawPlayer() {
+    if (player.dead) {
+      const open = Math.min(Math.PI - 0.05, player.deadT * 0.007);
+      ctx.fillStyle = "#ffe566";
+      ctx.beginPath();
+      ctx.moveTo(player.x, player.y);
+      ctx.arc(player.x, player.y, TILE * 0.42, open, Math.PI * 2 - open);
+      ctx.closePath();
+      ctx.fill();
+      return;
+    }
+    const m = 0.18 + player.mouth * 0.38;
+    let a0 = 0, a1 = Math.PI * 2;
+    if (player.dir === "right") { a0 = m; a1 = Math.PI * 2 - m; }
+    else if (player.dir === "left") { a0 = Math.PI + m; a1 = Math.PI - m; }
+    else if (player.dir === "up") { a0 = -Math.PI / 2 + m; a1 = -Math.PI / 2 - m; }
+    else { a0 = Math.PI / 2 + m; a1 = Math.PI / 2 - m; }
+
+    ctx.fillStyle = "#ffe566";
+    ctx.shadowColor = "#ffc400";
+    ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.moveTo(player.x, player.y);
+    ctx.arc(player.x, player.y, TILE * 0.42, a0, a1, false);
+    ctx.closePath();
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+
+  function drawEyes(g, x, y, big) {
+    const ox = DIR[g.dir].x * 2.4;
+    const oy = DIR[g.dir].y * 2.4;
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.ellipse(x - 4.2, y, big ? 4.2 : 3.4, big ? 5 : 4.1, 0, 0, Math.PI * 2);
+    ctx.ellipse(x + 4.2, y, big ? 4.2 : 3.4, big ? 5 : 4.1, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#203090";
+    ctx.beginPath();
+    ctx.arc(x - 4.2 + ox, y + oy, big ? 2.1 : 1.7, 0, Math.PI * 2);
+    ctx.arc(x + 4.2 + ox, y + oy, big ? 2.1 : 1.7, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawGhost(g) {
+    const x = g.x, y = g.y;
+    if (g.state === "eyes") {
+      drawEyes(g, x, y - 1, true);
+      return;
+    }
+    let col = g.color;
+    if (g.state === "frightened") {
+      const blink = frightLeft < 2000 && ((animT / 110) | 0) % 2 === 0;
+      col = blink ? "#eef" : "#3355ff";
+    }
+    const w = TILE * 0.9;
+    const top = y - w * 0.42;
+    ctx.fillStyle = col;
+    ctx.shadowColor = col;
+    ctx.shadowBlur = 9;
+    ctx.beginPath();
+    ctx.arc(x, top + w * 0.32, w * 0.4, Math.PI, 0);
+    const baseY = top + w * 0.82;
+    ctx.lineTo(x + w * 0.4, baseY);
+    const waves = 4;
+    const ww = (w * 0.8) / waves;
+    for (let i = waves; i >= 0; i--) {
+      const wx = x + w * 0.4 - i * ww;
+      const wy = baseY + (i % 2 === 0 ? 3.5 : -2);
+      ctx.lineTo(wx, wy);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    if (g.state === "frightened") {
+      const fc = frightLeft < 2000 && ((animT / 110) | 0) % 2 === 0 ? "#e33" : "#fff";
+      ctx.fillStyle = fc;
+      ctx.beginPath();
+      ctx.arc(x - 4, y - 2, 2, 0, Math.PI * 2);
+      ctx.arc(x + 4, y - 2, 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = fc;
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(x - 5, y + 5);
+      ctx.lineTo(x - 2, y + 2);
+      ctx.lineTo(x, y + 5);
+      ctx.lineTo(x + 2, y + 2);
+      ctx.lineTo(x + 5, y + 5);
+      ctx.stroke();
+    } else {
+      drawEyes(g, x, y - 2, false);
+    }
+  }
+
+  function render() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#04040c";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    drawMaze();
+    drawDots();
+    ghosts.forEach(drawGhost);
+    if (!(mode === "die" && player.deadT > 1100)) drawPlayer();
+
+    if (floatPts) {
+      ctx.fillStyle = "#9fffc8";
+      ctx.font = "bold 13px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(String(floatPts.v), floatPts.x, floatPts.y);
+    }
+    if (frightLeft > 0 && mode === "play") {
+      ctx.fillStyle = "rgba(140,170,255,0.9)";
+      ctx.font = "12px sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillText("パワーモード " + Math.ceil(frightLeft / 1000) + "秒", 8, canvas.height - 8);
+    }
+  }
+
+  // ---- Update loop ----
+  function speedPlayer() {
+    return 2.05 + (level - 1) * 0.06;
+  }
+  function speedGhost(g) {
+    if (g.state === "eyes") return 3.4;
+    if (g.state === "frightened") return 1.15;
+    if (g.inHouse && !g.leaving) return 0.85;
+    return 1.78 + (level - 1) * 0.07;
+  }
+
+  function update(dt, now) {
+    const ds = Math.min(dt, 50) / (1000 / 60);
+    animT += dt;
+
+    if (floatPts) {
+      floatPts.t -= dt;
+      floatPts.y -= 0.04 * dt;
+      if (floatPts.t <= 0) floatPts = null;
+    }
+
+    if (mode === "die") {
+      player.deadT += dt;
+      if (player.deadT > 1300) {
+        if (lives <= 0) {
+          mode = "over";
+          stopBgm();
+          showOverlay("ゲームオーバー", `スコア: ${score}<br>ハイスコア: ${hiscore}`);
+        } else {
+          resetActors(false);
+          mode = "play";
+          hideOverlay();
+          lastTs = 0;
+          startBgm();
+        }
+      }
+      return;
+    }
+
+    if (mode !== "play") return;
+
+    player.mouth += 0.09 * player.mouthV * ds;
+    if (player.mouth >= 1) { player.mouth = 1; player.mouthV = -1; }
+    if (player.mouth <= 0) { player.mouth = 0; player.mouthV = 1; }
+
+    if (frightLeft > 0) {
+      frightLeft -= dt;
+      if (frightLeft <= 0) {
+        frightLeft = 0;
+        ghosts.forEach(g => {
+          if (g.state === "frightened") g.state = scatter ? "scatter" : "chase";
+        });
+      }
+    } else {
+      updatePhases(now);
+    }
+
+    moveEnt(player, speedPlayer(), ds);
+    eatAtPlayer();
+    if (mode !== "play") return;
+
+    for (const g of ghosts) {
+      pickGhostDir(g);
+      moveEnt(g, speedGhost(g), ds);
+
+      if (g.state === "eyes") {
+        const gc = cellOf(g);
+        if (gc.c >= 12 && gc.c <= 15 && gc.r >= 13 && gc.r <= 15) {
+          g.state = scatter ? "scatter" : "chase";
+          g.inHouse = true;
+          g.leaving = false;
+          g.releaseAt = now + 900;
+          g.x = g.homeC * TILE;
+          g.y = g.homeR * TILE + TILE / 2;
+          g.dir = "up";
+          g.want = "up";
+        }
+      }
+    }
+
+    collideGhosts();
+  }
+
+  function loop(ts) {
+    if (!lastTs) lastTs = ts;
+    const dt = ts - lastTs;
+    lastTs = ts;
+    update(dt, ts);
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  // ---- Input ----
+  const keyDir = {
+    ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right",
+    w: "up", W: "up", s: "down", S: "down", a: "left", A: "left", d: "right", D: "right",
+  };
+
+  function pressDir(dir) {
+    if (mode === "play") {
+      player.want = dir;
+      trySetDir(player, dir);
+    }
+  }
+
+  function doAction() {
+    if (mode === "start" || mode === "over") {
+      // unlockAudio + playStart after resume completes (inside startGame)
+      startGame();
+    } else if (mode === "clear") {
+      nextLevel();
+    } else if (mode === "play") {
+      mode = "pause";
+      stopBgm();
+      showOverlay("一時停止", "ポーズ中です");
+    } else if (mode === "pause") {
+      mode = "play";
+      hideOverlay();
+      lastTs = 0;
+      unlockAudio().then(() => startBgm());
+    }
+  }
+
+  window.addEventListener("keydown", e => {
+    if (keyDir[e.key]) {
+      e.preventDefault();
+      // Always buffer want while playing (even if turn not yet possible)
+      pressDir(keyDir[e.key]);
+    } else if (e.key === " " || e.key === "Enter" || e.key === "p" || e.key === "P") {
+      e.preventDefault();
+      doAction();
+    }
+  });
+
+  let lastActionAt = -Infinity;
+  function triggerAction(e) {
+    // Overlay / start button only — never pause from maze taps during play.
+    if (mode === "play") return;
+    if (e.currentTarget !== actionButton && e.type !== "click" && e.cancelable) e.preventDefault();
+    if (e.currentTarget === actionButton) e.stopPropagation();
+    const now = performance.now();
+    if (now - lastActionAt < 350) return;
+    lastActionAt = now;
+    doAction();
+  }
+
+  function bindActionTarget(target) {
+    ["pointerup", "touchend", "click"].forEach(type => {
+      target.addEventListener(type, triggerAction, { passive: false });
+    });
+  }
+
+  // Start / resume / clear / over via overlay + action button (not canvas during play)
+  bindActionTarget(overlay);
+  bindActionTarget(actionButton);
+
+  // ---- Swipe steering on canvas / wrap (play only; taps do NOT pause) ----
+  const wrapEl = document.getElementById("wrap");
+  const SWIPE_THRESH = 28;
+  let swipePtr = null; // { id, x, y, used }
+
+  function swipePoint(e) {
+    if (e.changedTouches && e.changedTouches.length) return e.changedTouches[0];
+    if (e.touches && e.touches.length) return e.touches[0];
+    return e;
+  }
+
+  function beginSwipe(e) {
+    if (mode !== "play") return;
+    if (e.target && (e.target.closest && e.target.closest("#overlay"))) return;
+    const p = swipePoint(e);
+    swipePtr = { id: p.pointerId != null ? p.pointerId : "touch", x: p.clientX, y: p.clientY, used: false };
+    if (e.cancelable) e.preventDefault();
+  }
+
+  function moveSwipe(e) {
+    if (!swipePtr || mode !== "play") return;
+    const p = swipePoint(e);
+    if (p.pointerId != null && swipePtr.id !== "touch" && p.pointerId !== swipePtr.id) return;
+    const dx = p.clientX - swipePtr.x;
+    const dy = p.clientY - swipePtr.y;
+    if (!swipePtr.used && Math.max(Math.abs(dx), Math.abs(dy)) >= SWIPE_THRESH) {
+      if (Math.abs(dx) > Math.abs(dy)) pressDir(dx > 0 ? "right" : "left");
+      else pressDir(dy > 0 ? "down" : "up");
+      swipePtr.used = true;
+      swipePtr.x = p.clientX;
+      swipePtr.y = p.clientY;
+    } else if (swipePtr.used && Math.max(Math.abs(dx), Math.abs(dy)) >= SWIPE_THRESH) {
+      // Allow chained direction changes while finger stays down
+      if (Math.abs(dx) > Math.abs(dy)) pressDir(dx > 0 ? "right" : "left");
+      else pressDir(dy > 0 ? "down" : "up");
+      swipePtr.x = p.clientX;
+      swipePtr.y = p.clientY;
+    }
+    if (e.cancelable) e.preventDefault();
+  }
+
+  function endSwipe(e) {
+    if (!swipePtr) return;
+    const p = swipePoint(e);
+    if (p.pointerId != null && swipePtr.id !== "touch" && p.pointerId !== swipePtr.id) return;
+    swipePtr = null;
+    if (e.cancelable) e.preventDefault();
+  }
+
+  ["pointerdown", "touchstart"].forEach(type => {
+    wrapEl.addEventListener(type, beginSwipe, { passive: false });
+  });
+  ["pointermove", "touchmove"].forEach(type => {
+    wrapEl.addEventListener(type, moveSwipe, { passive: false });
+  });
+  ["pointerup", "pointercancel", "touchend", "touchcancel"].forEach(type => {
+    wrapEl.addEventListener(type, endSwipe, { passive: false });
+  });
+
+  document.querySelectorAll(".pad[data-dir]").forEach(btn => {
+    const dir = btn.getAttribute("data-dir");
+    let holdTimer = null;
+    const clearHold = () => {
+      if (holdTimer != null) {
+        clearInterval(holdTimer);
+        holdTimer = null;
+      }
+      btn.classList.remove("active");
+    };
+    const down = e => {
+      e.preventDefault();
+      btn.classList.add("active");
+      pressDir(dir);
+      if (holdTimer != null) clearInterval(holdTimer);
+      holdTimer = setInterval(() => pressDir(dir), 70);
+    };
+    const up = e => {
+      if (e.cancelable) e.preventDefault();
+      clearHold();
+    };
+    btn.addEventListener("pointerdown", down);
+    btn.addEventListener("pointerup", up);
+    btn.addEventListener("pointerleave", up);
+    btn.addEventListener("pointercancel", up);
+  });
+  ["pointerup", "touchend", "click"].forEach(type => {
+    pauseButton.addEventListener(type, e => {
+      if (e.cancelable) e.preventDefault();
+      if (e.type !== "click") e.stopPropagation();
+      const now = performance.now();
+      if (now - lastActionAt < 350) return;
+      lastActionAt = now;
+      doAction();
+    }, { passive: false });
+  });
+
+  // ---- Canvas display sizing (iOS Safari: avoid CSS 100% + object-fit) ----
+  const appEl = document.getElementById("app");
+  const titleEl = appEl.querySelector("h1");
+  const hudEl = document.getElementById("hud");
+  const controlsEl = document.getElementById("controls");
+  const footerEl = document.getElementById("footer");
+  const wrapSlot = document.getElementById("wrap");
+
+  function hasTouchInput() {
+    return (navigator.maxTouchPoints || 0) > 0
+      || "ontouchstart" in window
+      || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  }
+
+  function updateControlsVisibility() {
+    if (!controlsEl) return false;
+    // Always show the on-screen controller (iPhone / iPad / desktop).
+    // iPadOS "Request Desktop Website" can look like a mouse-only PC, so
+    // we never hide the pad based on pointer media queries.
+    const showControls = true;
+    controlsEl.hidden = false;
+    controlsEl.removeAttribute("hidden");
+    controlsEl.classList.add("show-pad");
+    controlsEl.classList.remove("hide-pad"); // keep remove for old cached class
+    controlsEl.style.display = "grid";
+    controlsEl.style.visibility = "visible";
+    controlsEl.style.opacity = "1";
+    return showControls;
+  }
+
+  function reserveLayoutSpace() {
+    if (!appEl) return;
+    const appStyle = getComputedStyle(appEl);
+    const gap = parseFloat(appStyle.rowGap || appStyle.gap) || 0;
+    const paddingY = (parseFloat(appStyle.paddingTop) || 0)
+      + (parseFloat(appStyle.paddingBottom) || 0);
+    const outerHeight = el => {
+      if (!el) return 0;
+      // Prefer offsetHeight; fall back to getBoundingClientRect when
+      // offsetParent is null during early Safari layout (still visible).
+      const style = getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden") return 0;
+      const h = el.offsetHeight || el.getBoundingClientRect().height || 0;
+      return h
+        + (parseFloat(style.marginTop) || 0)
+        + (parseFloat(style.marginBottom) || 0);
+    };
+    // Always stack: maze above controls. Count D-pad in vertical chrome
+    // for every orientation (including iPad landscape).
+    const chromeEls = [titleEl, hudEl, controlsEl, footerEl];
+    const fixedHeight = chromeEls
+      .reduce((total, el) => total + outerHeight(el), 0);
+    const gaps = gap * 4;
+    const measured = Math.ceil(fixedHeight + gaps + paddingY);
+    const floor = 420;
+    appEl.style.setProperty("--ui-chrome", Math.max(floor, measured) + "px");
+  }
+
+  function isIpadSizedViewport() {
+    const w = Math.min(window.innerWidth, window.screen?.width || window.innerWidth);
+    const h = Math.min(window.innerHeight, window.screen?.height || window.innerHeight);
+    const shortSide = Math.min(w, h);
+    const longSide = Math.max(w, h);
+    // Typical iPad / large tablet band; also catch iPadOS desktop-site mode.
+    return shortSide >= 600 && longSide >= 900 && hasTouchInput();
+  }
+
+  function fitCanvas() {
+    // Visibility must be settled before measuring the layout. This is
+    // important on the first Safari/iPadOS layout, before any resize event.
+    updateControlsVisibility();
+    reserveLayoutSpace();
+
+    const wrapW = wrapSlot.clientWidth;
+    const wrapH = wrapSlot.clientHeight;
+    if (wrapW <= 0 || wrapH <= 0) return;
+    const cw = canvas.width || 560;
+    const ch = canvas.height || 620;
+    // Cap maze scale so the D-pad always stays visible below (esp. iPad).
+    const maxScale = isIpadSizedViewport() ? 0.72 : 1;
+    const scale = Math.min(wrapW / cw, wrapH / ch, maxScale);
+    const cssW = Math.max(1, Math.floor(cw * scale));
+    const cssH = Math.max(1, Math.floor(ch * scale));
+    canvas.style.width = cssW + "px";
+    canvas.style.height = cssH + "px";
+  }
+
+  let fitRaf = 0;
+  function scheduleFitCanvas() {
+    if (fitRaf) cancelAnimationFrame(fitRaf);
+    fitRaf = requestAnimationFrame(() => {
+      fitRaf = 0;
+      fitCanvas();
+    });
+  }
+
+  window.addEventListener("resize", scheduleFitCanvas);
+  window.addEventListener("orientationchange", scheduleFitCanvas);
+  window.addEventListener("pageshow", scheduleFitCanvas);
+  window.addEventListener("load", scheduleFitCanvas);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) scheduleFitCanvas();
+  });
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", scheduleFitCanvas, { passive: true });
+    window.visualViewport.addEventListener("scroll", scheduleFitCanvas, { passive: true });
+  }
+  if (typeof ResizeObserver !== "undefined") {
+    try {
+      const layoutObserver = new ResizeObserver(scheduleFitCanvas);
+      layoutObserver.observe(wrapSlot);
+      layoutObserver.observe(appEl);
+      layoutObserver.observe(controlsEl);
+      layoutObserver.observe(hudEl);
+    } catch (_) {}
+  }
+
+  // boot
+  buildMaze();
+  resetActors(true);
+  updateHUD();
+  updateActionControls();
+  updateControlsVisibility();
+  fitCanvas();
+  scheduleFitCanvas();
+  // Safari may settle the visual viewport and flex sizes after first paint.
+  requestAnimationFrame(() => requestAnimationFrame(scheduleFitCanvas));
+  setTimeout(scheduleFitCanvas, 120);
+  render();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
